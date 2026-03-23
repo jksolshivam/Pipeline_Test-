@@ -5,4 +5,3 @@ npm-debug.log
 # 2. Environment and Secrets
 .env
 .aws
-*secret.txt

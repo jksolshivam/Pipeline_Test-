@@ -1,18 +1,14 @@
 FROM node:20-alpine
 
+# Create app directory
 WORKDIR /usr/src/app
 
-ENV NODE_ENV=production
-
-RUN apk add --no-cache dumb-init
-
+# Install dependencies
 COPY package*.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --only=production
 
-COPY --chown=node:node src ./src
+# Bundle app source
+COPY src ./src
 
-USER node
-
-ENTRYPOINT ["/usr/bin/dumb-init", "--"]
-CMD ["node", "src/consumer.js"]
- 
+# Start command
+CMD [ "npm", "start" ]
