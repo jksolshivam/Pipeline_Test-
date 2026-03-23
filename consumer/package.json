@@ -2,6 +2,7 @@
   "name": "event-pipeline-consumer",
   "version": "1.0.0",
   "description": "Event Ingestion Consumer Worker",
+  "type": "commonjs",
   "main": "src/consumer.js",
   "scripts": {
     "start": "node src/consumer.js",

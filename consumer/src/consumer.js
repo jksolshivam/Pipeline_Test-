@@ -189,7 +189,6 @@ async function start() {
       clientId: secrets.KAFKA_CLIENT_ID,
       brokers: secrets.KAFKA_BROKERS.split(","),
       ssl: true,
-      metadataMaxAge: 60000,
       sasl: {
         mechanism: "oauthbearer",
         oauthBearerProvider: async () => {
