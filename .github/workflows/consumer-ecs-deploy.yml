@@ -9,6 +9,10 @@ on:
       - ".github/workflows/consumer-ecs-deploy.yml"
   workflow_dispatch:
 
+concurrency:
+  group: consumer-ecs-deploy
+  cancel-in-progress: false
+
 env:
   AWS_REGION: ${{ vars.AWS_REGION }}
   ECR_REPOSITORY: ${{ vars.CONSUMER_ECR_REPOSITORY }}
@@ -24,7 +28,7 @@ jobs:
   deploy:
     name: Build, push, and deploy consumer
     runs-on: ubuntu-latest
-    timeout-minutes: 1
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -41,6 +45,16 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      - name: Validate AWS deployment targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws sts get-caller-identity >/dev/null
+          aws ecr describe-repositories --repository-names "${ECR_REPOSITORY}" --region "${AWS_REGION}" >/dev/null
+          aws ecs describe-clusters --clusters "${ECS_CLUSTER}" --region "${AWS_REGION}" --query 'clusters[0].status' --output text | grep -qx ACTIVE
+          aws ecs describe-services --cluster "${ECS_CLUSTER}" --services "${ECS_SERVICE}" --region "${AWS_REGION}" --query 'services[0].status' --output text | grep -qx ACTIVE
+          aws ecs describe-task-definition --task-definition "${TASK_DEFINITION_FAMILY}" --region "${AWS_REGION}" >/dev/null
+
       - name: Set image tag
         id: image
         run: |
@@ -48,7 +62,9 @@ jobs:
 
       - name: Build and push image
         working-directory: ./consumer
+        shell: bash
         run: |
+          set -euo pipefail
           docker build -t "${{ steps.image.outputs.uri }}" .
 
       - name: Scan image with Trivy
@@ -61,10 +77,15 @@ jobs:
           ignore-unfixed: true
 
       - name: Push image to ECR
-        run: docker push "${{ steps.image.outputs.uri }}"
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker push "${{ steps.image.outputs.uri }}"
 
       - name: Download current task definition
+        shell: bash
         run: |
+          set -euo pipefail
           TASK_DEF_ARN=$(aws ecs describe-task-definition \
             --task-definition "${TASK_DEFINITION_FAMILY}" \
             --query 'taskDefinition.taskDefinitionArn' \
@@ -84,7 +105,9 @@ jobs:
           image: ${{ steps.image.outputs.uri }}
 
       - name: Enable ECS deployment rollback
+        shell: bash
         run: |
+          set -euo pipefail
           aws ecs update-service \
             --cluster "${ECS_CLUSTER}" \
             --service "${ECS_SERVICE}" \
