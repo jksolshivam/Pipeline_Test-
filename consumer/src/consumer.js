@@ -200,7 +200,10 @@ async function start() {
       },
     });
 
-    consumer = kafka.consumer({ groupId: kafkaGroupId });
+    consumer = kafka.consumer({ groupId: kafkaGroupId,
+      sessionTimeout: 30000,      // 🔥 increase this (default ~10s)
+      heartbeatInterval: 3000, 
+     });
 
     await consumer.connect();
     isConsumerConnected = true;
