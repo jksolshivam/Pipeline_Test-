@@ -1,0 +1,19 @@
+{
+  "name": "event-pipeline-producer",
+  "version": "1.0.0",
+  "description": "Event Ingestion Producer API",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "node --watch src/app.js",
+    "db:migrate": "node src/scripts/migrate.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-secrets-manager": "^3.1014.0",
+    "@clickhouse/client": "^0.3.0",
+    "aws-msk-iam-sasl-signer-js": "^1.0.3",
+    "fastify": "^4.26.0",
+    "kafkajs": "^2.2.4",
+    "kafkajs-snappy": "^1.1.0"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "event-pipeline-consumer",
+  "version": "1.0.0",
+  "description": "Event Ingestion Consumer Worker",
+  "main": "src/consumer.js",
+  "scripts": {
+    "start": "node src/consumer.js",
+    "dev": "node --watch src/consumer.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-secrets-manager": "^3.1014.0",
+    "@clickhouse/client": "^0.3.0",
+    "aws-msk-iam-sasl-signer-js": "^1.0.3",
+    "kafkajs": "^2.2.4",
+    "kafkajs-snappy": "^1.1.0"
+  }
+}

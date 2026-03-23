@@ -1,0 +1,8 @@
+# 1. Dependency Directories
+node_modules
+npm-debug.log
+
+# 2. Environment and Secrets
+.env
+.aws
+.DS_Store
