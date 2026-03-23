@@ -14,6 +14,7 @@ env:
   ECR_REPOSITORY: ${{ vars.CONSUMER_ECR_REPOSITORY }}
   ECS_CLUSTER: ${{ vars.CONSUMER_ECS_CLUSTER }}
   ECS_SERVICE: ${{ vars.CONSUMER_ECS_SERVICE }}
+  TASK_DEFINITION_FAMILY: in-app-events-Consumer
   CONTAINER_NAME: consumer
 
 permissions:
@@ -53,10 +54,9 @@ jobs:
 
       - name: Download current task definition
         run: |
-          TASK_DEF_ARN=$(aws ecs describe-services \
-            --cluster "${ECS_CLUSTER}" \
-            --services "${ECS_SERVICE}" \
-            --query 'services[0].taskDefinition' \
+          TASK_DEF_ARN=$(aws ecs describe-task-definition \
+            --task-definition "${TASK_DEFINITION_FAMILY}" \
+            --query 'taskDefinition.taskDefinitionArn' \
             --output text)
 
           aws ecs describe-task-definition \
