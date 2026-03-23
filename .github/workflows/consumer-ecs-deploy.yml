@@ -50,36 +50,18 @@ jobs:
         working-directory: ./consumer
         run: |
           docker build -t "${{ steps.image.outputs.uri }}" .
-          docker push "${{ steps.image.outputs.uri }}"
 
-      - name: Scan image in ECR
-        run: |
-          aws ecr start-image-scan \
-            --repository-name "${ECR_REPOSITORY}" \
-            --image-id imageTag="${GITHUB_SHA}" \
-            --region "${AWS_REGION}" \
-            --no-cli-pager
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.image.outputs.uri }}
+          format: table
+          exit-code: '1'
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
 
-          aws ecr wait image-scan-complete \
-            --repository-name "${ECR_REPOSITORY}" \
-            --image-id imageTag="${GITHUB_SHA}" \
-            --region "${AWS_REGION}" \
-            --no-cli-pager
-
-          SCAN_COUNTS=$(aws ecr describe-image-scan-findings \
-            --repository-name "${ECR_REPOSITORY}" \
-            --image-id imageTag="${GITHUB_SHA}" \
-            --region "${AWS_REGION}" \
-            --query 'imageScanFindings.findingSeverityCounts' \
-            --output json)
-
-          HIGH_COUNT=$(echo "$SCAN_COUNTS" | jq -r '.HIGH // 0')
-          CRITICAL_COUNT=$(echo "$SCAN_COUNTS" | jq -r '.CRITICAL // 0')
-
-          if [ "$HIGH_COUNT" -gt 0 ] || [ "$CRITICAL_COUNT" -gt 0 ]; then
-            echo "Image scan failed: HIGH=$HIGH_COUNT CRITICAL=$CRITICAL_COUNT"
-            exit 1
-          fi
+      - name: Push image to ECR
+        run: docker push "${{ steps.image.outputs.uri }}"
 
       - name: Download current task definition
         run: |
