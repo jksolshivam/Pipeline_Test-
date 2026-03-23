@@ -3,7 +3,7 @@ name: Deploy Producer to ECS
 on:
   push:
     branches:
-      - main
+      - master
     paths:
       - "producer/**"
       - ".github/workflows/producer-ecs-deploy.yml"

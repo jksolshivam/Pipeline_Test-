@@ -3,7 +3,7 @@ name: Deploy Consumer to ECS
 on:
   push:
     branches:
-      - main
+      - master
     paths:
       - "consumer/**"
       - ".github/workflows/consumer-ecs-deploy.yml"
