@@ -11,12 +11,10 @@ on:
 
 env:
   AWS_REGION: ${{ vars.AWS_REGION }}
-  SECRET_NAME: in-app-events-credentials
   ECR_REPOSITORY: ${{ vars.CONSUMER_ECR_REPOSITORY }}
   ECS_CLUSTER: ${{ vars.CONSUMER_ECS_CLUSTER }}
   ECS_SERVICE: ${{ vars.CONSUMER_ECS_SERVICE }}
   CONTAINER_NAME: consumer
-  TASK_DEFINITION: .github/ecs/consumer-task-definition.json
 
 permissions:
   contents: read
@@ -42,32 +40,10 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Enable ECS deployment rollback
-        run: |
-          aws ecs update-service \
-            --cluster "${ECS_CLUSTER}" \
-            --service "${ECS_SERVICE}" \
-            --deployment-configuration "deploymentCircuitBreaker={enable=true,rollback=true}" \
-            --no-cli-pager
-
       - name: Set image tag
         id: image
         run: |
           echo "uri=${{ steps.login-ecr.outputs.registry }}/${ECR_REPOSITORY}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-
-      - name: Prepare task definition
-        id: task-def
-        run: |
-          jq --arg aws_region "${AWS_REGION}" \
-            '.containerDefinitions |= map(
-              if .name == env.CONTAINER_NAME then
-                .environment |= map(
-                  if .name == "AWS_REGION" then .value = $aws_region else . end
-                )
-                | .logConfiguration.options."awslogs-region" = $aws_region
-              else . end
-            )' \
-            "${TASK_DEFINITION}" > task-definition.rendered.json
 
       - name: Build and push image
         working-directory: ./consumer
@@ -75,13 +51,34 @@ jobs:
           docker build -t "${{ steps.image.outputs.uri }}" .
           docker push "${{ steps.image.outputs.uri }}"
 
+      - name: Download current task definition
+        run: |
+          TASK_DEF_ARN=$(aws ecs describe-services \
+            --cluster "${ECS_CLUSTER}" \
+            --services "${ECS_SERVICE}" \
+            --query 'services[0].taskDefinition' \
+            --output text)
+
+          aws ecs describe-task-definition \
+            --task-definition "${TASK_DEF_ARN}" \
+            --query taskDefinition \
+            --output json > task-definition.json
+
       - name: Render task definition
         id: render-task-definition
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
-          task-definition: task-definition.rendered.json
+          task-definition: task-definition.json
           container-name: ${{ env.CONTAINER_NAME }}
           image: ${{ steps.image.outputs.uri }}
+
+      - name: Enable ECS deployment rollback
+        run: |
+          aws ecs update-service \
+            --cluster "${ECS_CLUSTER}" \
+            --service "${ECS_SERVICE}" \
+            --deployment-configuration "deploymentCircuitBreaker={enable=true,rollback=true}" \
+            --no-cli-pager
 
       - name: Deploy to Amazon ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
