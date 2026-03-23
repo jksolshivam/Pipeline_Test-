@@ -167,6 +167,7 @@ async function runConsumer() {
   await consumer.run({
     eachBatchAutoResolve: true,
     eachBatch: async ({ batch, heartbeat, isRunning, isStale }) => {
+      console.log("MESSAGE RECEIVED:", message.value.toString());
       if (!clickhouseClient) {
         console.error("Clickhouse client not initialized");
         return;
@@ -174,7 +175,7 @@ async function runConsumer() {
 
       const route = allRoutes.find((r) => r.topic === batch.topic);
       if (!route) return;
-
+      console.log("route",route)
       const targetPath = `${route.database}.${route.table}`;
       if (!isRunning() || isStale()) return;
 
