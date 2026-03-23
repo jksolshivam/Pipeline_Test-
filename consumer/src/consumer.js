@@ -104,7 +104,7 @@ async function runConsumer() {
       fromBeginning: false,
     });
 
-  console.log(`Subscribed to topics: ${topics.join(", ")}`);
+
 
   await consumer.run({
     eachBatchAutoResolve: true,
