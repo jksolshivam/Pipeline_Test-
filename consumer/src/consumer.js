@@ -99,11 +99,10 @@ async function flushBuffer() {
 // -------------------- CONSUMER --------------------
 
 async function runConsumer() {
-    await consumer.subscribe({
+   await consumer.subscribe({
     topic: /^event-.*$/,
       fromBeginning: false,
     });
-  }
 
   console.log(`Subscribed to topics: ${topics.join(", ")}`);
 
@@ -157,6 +156,7 @@ async function runConsumer() {
       await heartbeat();
     },
   });
+}
 
 
 // -------------------- START --------------------
