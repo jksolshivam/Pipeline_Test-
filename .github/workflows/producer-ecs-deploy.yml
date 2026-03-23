@@ -20,12 +20,12 @@ env:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   deploy:
     name: Build, push, and deploy producer
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
@@ -35,11 +35,20 @@ jobs:
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ env.AWS_REGION }}
-          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
       - name: Log in to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Enable ECS deployment rollback
+        run: |
+          aws ecs update-service \
+            --cluster "${ECS_CLUSTER}" \
+            --service "${ECS_SERVICE}" \
+            --deployment-configuration "deploymentCircuitBreaker={enable=true,rollback=true}" \
+            --no-cli-pager
 
       - name: Set image tag
         id: image
@@ -75,9 +84,11 @@ jobs:
           image: ${{ steps.image.outputs.uri }}
 
       - name: Deploy to Amazon ECS
-        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
           task-definition: ${{ steps.render-task-definition.outputs.task-definition }}
           service: ${{ env.ECS_SERVICE }}
           cluster: ${{ env.ECS_CLUSTER }}
+          max-retries: 1
+          wait-max-delay-seconds: 15
           wait-for-service-stability: true
