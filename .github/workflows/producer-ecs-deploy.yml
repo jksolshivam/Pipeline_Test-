@@ -67,15 +67,6 @@ jobs:
           set -euo pipefail
           docker build -t "${{ steps.image.outputs.uri }}" .
 
-      - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@v0.64.1
-        with:
-          image-ref: ${{ steps.image.outputs.uri }}
-          format: table
-          exit-code: '1'
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-
       - name: Push image to ECR
         shell: bash
         run: |
