@@ -1,0 +1,83 @@
+name: Deploy Producer to ECS
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "producer/**"
+      - ".github/workflows/producer-ecs-deploy.yml"
+  workflow_dispatch:
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  SECRET_NAME: in-app-events-credentials
+  ECR_REPOSITORY: ${{ vars.PRODUCER_ECR_REPOSITORY }}
+  ECS_CLUSTER: ${{ vars.PRODUCER_ECS_CLUSTER }}
+  ECS_SERVICE: ${{ vars.PRODUCER_ECS_SERVICE }}
+  CONTAINER_NAME: producer
+  TASK_DEFINITION: .github/ecs/producer-task-definition.json
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    name: Build, push, and deploy producer
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image tag
+        id: image
+        run: |
+          echo "uri=${{ steps.login-ecr.outputs.registry }}/${ECR_REPOSITORY}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare task definition
+        id: task-def
+        run: |
+          jq --arg aws_region "${AWS_REGION}" \
+            '.containerDefinitions |= map(
+              if .name == env.CONTAINER_NAME then
+                .environment |= map(
+                  if .name == "AWS_REGION" then .value = $aws_region else . end
+                )
+                | .logConfiguration.options."awslogs-region" = $aws_region
+              else . end
+            )' \
+            "${TASK_DEFINITION}" > task-definition.rendered.json
+
+      - name: Build and push image
+        working-directory: ./producer
+        run: |
+          docker build -t "${{ steps.image.outputs.uri }}" .
+          docker push "${{ steps.image.outputs.uri }}"
+
+      - name: Render task definition
+        id: render-task-definition
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.rendered.json
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ steps.image.outputs.uri }}
+
+      - name: Deploy to Amazon ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.render-task-definition.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true

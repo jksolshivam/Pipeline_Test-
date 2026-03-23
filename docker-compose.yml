@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  producer:
+    build:
+      context: ./producer
+    init: true
+    restart: unless-stopped
+    ports:
+      - "3004:3004"
+    # Provide environment variables or an env_file at deployment time.
+
+  consumer:
+    build:
+      context: ./consumer
+    init: true
+    restart: unless-stopped
+    # Provide environment variables or an env_file at deployment time.
