@@ -1,3 +1,4 @@
+const http = require("http");
 const { Kafka, CompressionTypes, CompressionCodecs } = require("kafkajs");
 const SnappyCodec = require("kafkajs-snappy");
 const { createClient } = require("@clickhouse/client");
@@ -12,6 +13,7 @@ const AWS_REGION = process.env.AWS_REGION || "us-east-1";
 let consumer;
 let kafka;
 let clickhouseClient;
+let healthServer;
 
 let isConsumerConnected = false;
 let batchBuffer = {};
@@ -158,6 +160,28 @@ async function runConsumer() {
   });
 }
 
+function startHealthServer() {
+  healthServer = http.createServer((req, res) => {
+    if (req.method === "GET" && req.url === "/health") {
+      const statusCode = isConsumerConnected ? 200 : 503;
+      res.writeHead(statusCode, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          status: isConsumerConnected ? "ok" : "starting",
+          consumerConnected: isConsumerConnected,
+        }),
+      );
+      return;
+    }
+
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Not Found" }));
+  });
+
+  healthServer.listen(3005, "0.0.0.0", () => {
+    console.log("Health server listening on 3005");
+  });
+}
 
 // -------------------- START --------------------
 
@@ -179,6 +203,7 @@ async function start() {
     );
 
     setInterval(flushBuffer, insertIntervalMs);
+    startHealthServer();
 
     await configManager.fetchConfig();
     configManager.startAutoRefresh();
@@ -226,6 +251,18 @@ start();
     console.log(`🛑 Shutdown (${signal})`);
 
     await flushBuffer();
+
+    if (healthServer) {
+      await new Promise((resolve, reject) => {
+        healthServer.close((err) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+          resolve();
+        });
+      });
+    }
 
     if (isConsumerConnected) {
       await consumer.disconnect();
