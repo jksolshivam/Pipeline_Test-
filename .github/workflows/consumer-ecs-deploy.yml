@@ -24,7 +24,7 @@ jobs:
   deploy:
     name: Build, push, and deploy consumer
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 1
 
     steps:
       - name: Checkout
@@ -87,5 +87,4 @@ jobs:
           service: ${{ env.ECS_SERVICE }}
           cluster: ${{ env.ECS_CLUSTER }}
           max-retries: 1
-          wait-max-delay-seconds: 15
           wait-for-service-stability: true
