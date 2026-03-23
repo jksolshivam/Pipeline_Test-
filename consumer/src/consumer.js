@@ -85,6 +85,7 @@ async function flushBuffer() {
         values: rows,
         format: "JSONEachRow",
       });
+      console.log(`Flushed ${rows.length} rows to ${table}`);
     } catch (err) {
       console.error(`Flush failed for ${table}:`, err.message);
 
@@ -98,12 +99,13 @@ async function flushBuffer() {
 // -------------------- CONSUMER --------------------
 
 async function runConsumer() {
-  await consumer.subscribe({
+    await consumer.subscribe({
     topic: /^event-.*$/,
-    fromBeginning: false,
-  });
+      fromBeginning: false,
+    });
+  }
 
-  console.log("📡 Subscribed to topics");
+  console.log(`Subscribed to topics: ${topics.join(", ")}`);
 
   await consumer.run({
     eachBatchAutoResolve: true,
@@ -115,15 +117,24 @@ async function runConsumer() {
       }
       if (!isRunning() || isStale()) return;
 
+      console.log(
+        `Received batch topic=${batch.topic} partition=${batch.partition} messages=${batch.messages.length}`,
+      );
+
       const route = allRoutes.find((r) => r.topic === batch.topic);
-      if (!route) return;
+      if (!route) {
+        console.warn(`No route found for topic ${batch.topic}, skipping batch`);
+        return;
+      }
 
       const targetPath = `${route.database}.${route.table}`;
 
       try {
-        const payloads = batch.messages.map((m) =>
-          JSON.parse(m.value.toString()),
-        );
+        const payloads = [];
+        for (const message of batch.messages) {
+          payloads.push(JSON.parse(message.value.toString()));
+          await heartbeat();
+        }
 
         if (!batchBuffer[targetPath]) {
           batchBuffer[targetPath] = [];
@@ -131,6 +142,10 @@ async function runConsumer() {
 
         batchBuffer[targetPath].push(...payloads);
         batchCount += payloads.length;
+
+        console.log(
+          `Buffered ${payloads.length} rows for ${targetPath}. Total buffered rows: ${batchCount}`,
+        );
 
         if (batchCount >= batchSize) {
           await flushBuffer();
@@ -142,7 +157,7 @@ async function runConsumer() {
       await heartbeat();
     },
   });
-}
+
 
 // -------------------- START --------------------
 
