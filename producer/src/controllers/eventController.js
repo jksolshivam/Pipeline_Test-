@@ -15,7 +15,7 @@ const handleEventRoute = (request, reply) => {
 
   if (!route) {
     enqueueEvent(
-      "unregistered-route",
+      "event-unregistered-route",
       { headers, raw_body: rawBody },
       request.server.producer,
     );
@@ -24,7 +24,7 @@ const handleEventRoute = (request, reply) => {
 
   if (!packageSecret) {
     enqueueEvent(
-      "unlisted-package-id",
+      "event-unlisted-package-id",
       { headers, raw_body: rawBody },
       request.server.producer,
     );

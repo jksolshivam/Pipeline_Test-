@@ -7,7 +7,7 @@ const { loadSecrets } = require("./secrets");
 CompressionCodecs[CompressionTypes.Snappy] = SnappyCodec;
 
 // Secret Configuration
-const SECRET_NAME = process.env.SECRET_NAME || "in-app-events-credentials";
+const SECRET_NAME = "in-app-events-credentials";
 const AWS_REGION = process.env.AWS_REGION || "us-east-1";
 
 let isConsumerConnected = false;
@@ -29,23 +29,25 @@ const configManager = {
       });
       const rows = await resultSet.json();
 
-      allRoutes = [
+      const newRoutes = [
         ...rows.map((r) => ({
           topic: r.er_kafka_topic,
           database: r.ch_db_name,
           table: r.ch_table_name,
         })),
         {
-          topic: "unregistered-route",
+          topic: "event-unregistered-route",
           database: "default",
           table: "unregistered_routes",
         },
         {
-          topic: "unlisted-package-id",
+          topic: "event-unlisted-package-id",
           database: "default",
           table: "unlisted_package_ids",
         },
       ];
+
+      allRoutes = newRoutes;
     } catch (err) {
       console.error("Database config error:", err.message);
     }
@@ -131,6 +133,7 @@ async function start() {
       clientId: kafkaClientId,
       brokers: kafkaBrokers,
       ssl: true,
+      metadataMaxAge: 60000,
       sasl: {
         mechanism: "oauthbearer",
         oauthBearerProvider: async () => {
@@ -145,55 +148,60 @@ async function start() {
     isConsumerConnected = true;
     console.log("✅ Kafka Consumer connected");
 
-    const topicsToSubscribe = [...new Set(allRoutes.map((r) => r.topic))];
-    await consumer.subscribe({
-      topics: topicsToSubscribe,
-      fromBeginning: false,
-    });
-    console.log(`📡 Subscribed to topics: ${topicsToSubscribe.join(", ")}`);
-
-    await consumer.run({
-      eachBatchAutoResolve: true,
-      eachBatch: async ({ batch, heartbeat, isRunning, isStale }) => {
-        if (!clickhouseClient) {
-          console.error("Clickhouse client not initialized");
-          return;
-        }
-
-        const route = allRoutes.find((r) => r.topic === batch.topic);
-        if (!route) return;
-
-        const targetPath = `${route.database}.${route.table}`;
-        if (!isRunning() || isStale()) return;
-
-        try {
-          const payloads = batch.messages.map((m) =>
-            JSON.parse(m.value.toString()),
-          );
-          if (!batchBuffer[targetPath]) {
-            batchBuffer[targetPath] = [];
-          }
-
-          batchBuffer[targetPath].push(...payloads);
-          batchCount += payloads.length;
-
-          if (batchCount >= batchSize) {
-            await flushBuffer();
-          }
-        } catch (err) {
-          console.error(
-            `Error processing batch for topic ${batch.topic}:`,
-            err.message,
-          );
-          throw err;
-        }
-        await heartbeat();
-      },
-    });
+    await runConsumer();
   } catch (err) {
     console.error("Bootstrap failed:", err.message);
     process.exit(1);
   }
+}
+
+async function runConsumer() {
+  // 1. Subscribe to all dynamic event topics using a regex
+  await consumer.subscribe({
+    topic: /^event-.*$/,
+    fromBeginning: false,
+  });
+
+  console.log(`📡 Subscribed to dynamic topics (/^event-.*$/) and fallbacks.`);
+
+  await consumer.run({
+    eachBatchAutoResolve: true,
+    eachBatch: async ({ batch, heartbeat, isRunning, isStale }) => {
+      if (!clickhouseClient) {
+        console.error("Clickhouse client not initialized");
+        return;
+      }
+
+      const route = allRoutes.find((r) => r.topic === batch.topic);
+      if (!route) return;
+
+      const targetPath = `${route.database}.${route.table}`;
+      if (!isRunning() || isStale()) return;
+
+      try {
+        const payloads = batch.messages.map((m) =>
+          JSON.parse(m.value.toString()),
+        );
+        if (!batchBuffer[targetPath]) {
+          batchBuffer[targetPath] = [];
+        }
+
+        batchBuffer[targetPath].push(...payloads);
+        batchCount += payloads.length;
+
+        if (batchCount >= batchSize) {
+          await flushBuffer();
+        }
+      } catch (err) {
+        console.error(
+          `Error processing batch for topic ${batch.topic}:`,
+          err.message,
+        );
+        throw err;
+      }
+      await heartbeat();
+    },
+  });
 }
 
 start();

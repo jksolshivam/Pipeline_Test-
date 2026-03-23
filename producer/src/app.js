@@ -20,8 +20,8 @@ const eventRoutes = require("./routes/eventRoutes");
 CompressionCodecs[CompressionTypes.Snappy] = SnappyCodec;
 
 // Secret Configuration
-const SECRET_NAME = process.env.SECRET_NAME || "in-app-events-credentials";
-const AWS_REGION = process.env.AWS_REGION || "us-east-1";
+const SECRET_NAME = "in-app-events-credentials";
+const AWS_REGION = "us-east-1";
 
 // Global Clients (Initialized in app())
 let clickhouseClient;
