@@ -15,7 +15,7 @@ env:
   ECS_CLUSTER: ${{ vars.CONSUMER_ECS_CLUSTER }}
   ECS_SERVICE: ${{ vars.CONSUMER_ECS_SERVICE }}
   TASK_DEFINITION_FAMILY: in-app-events-Consumer
-  CONTAINER_NAME: consumer
+  CONTAINER_NAME: in-app-events-Consumer
 
 permissions:
   contents: read

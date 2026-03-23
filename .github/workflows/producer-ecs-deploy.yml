@@ -15,7 +15,7 @@ env:
   ECS_CLUSTER: ${{ vars.PRODUCER_ECS_CLUSTER }}
   ECS_SERVICE: ${{ vars.PRODUCER_ECS_SERVICE }}
   TASK_DEFINITION_FAMILY: in-app-events-Producer
-  CONTAINER_NAME: producer
+  CONTAINER_NAME: in-app-events-Producer
 
 permissions:
   contents: read
