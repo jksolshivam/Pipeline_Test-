@@ -15,3 +15,4 @@ USER node
 
 ENTRYPOINT ["/usr/bin/dumb-init", "--"]
 CMD ["node", "src/consumer.js"]
+ 
