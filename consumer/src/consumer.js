@@ -107,56 +107,58 @@ async function runConsumer() {
 
 
 
-  await consumer.run({
-    eachBatchAutoResolve: true,
+await consumer.run({
+  eachBatchAutoResolve: false,
 
-    eachBatch: async ({ batch, heartbeat, isRunning, isStale }) => {
-      if (!clickhouseClient) {
-        console.error("Clickhouse client not initialized");
-        return;
-      }
-      if (!isRunning() || isStale()) return;
+  eachBatch: async ({
+    batch,
+    resolveOffset,
+    heartbeat,
+    commitOffsetsIfNecessary,
+    isRunning,
+    isStale,
+  }) => {
+    if (!isRunning() || isStale()) return;
 
-      console.log(
-        `Received batch topic=${batch.topic} partition=${batch.partition} messages=${batch.messages.length}`,
-      );
+    const route = allRoutes.find((r) => r.topic === batch.topic);
+    if (!route) return;
 
-      const route = allRoutes.find((r) => r.topic === batch.topic);
-      if (!route) {
-        console.warn(`No route found for topic ${batch.topic}, skipping batch`);
-        return;
-      }
+    const targetPath = `${route.database}.${route.table}`;
 
-      const targetPath = `${route.database}.${route.table}`;
+    try {
+      const payloads = [];
 
-      try {
-        const payloads = [];
-        for (const message of batch.messages) {
-          payloads.push(JSON.parse(message.value.toString()));
-          await heartbeat();
-        }
+      for (const message of batch.messages) {
+        payloads.push(JSON.parse(message.value.toString()));
 
-        if (!batchBuffer[targetPath]) {
-          batchBuffer[targetPath] = [];
-        }
+        // 👇 mark message processed (but NOT committed yet)
+        resolveOffset(message.offset);
 
-        batchBuffer[targetPath].push(...payloads);
-        batchCount += payloads.length;
-
-        console.log(
-          `Buffered ${payloads.length} rows for ${targetPath}. Total buffered rows: ${batchCount}`,
-        );
-
-        if (batchCount >= batchSize) {
-          await flushBuffer();
-        }
-      } catch (err) {
-        console.error(`Error processing ${batch.topic}:`, err.message);
+        await heartbeat();
       }
 
-      await heartbeat();
-    },
-  });
+      if (!batchBuffer[targetPath]) {
+        batchBuffer[targetPath] = [];
+      }
+
+      batchBuffer[targetPath].push(...payloads);
+      batchCount += payloads.length;
+
+      // 🔥 IMPORTANT: flush immediately OR before commit
+      if (batchCount >= batchSize) {
+        await flushBuffer();
+      }
+
+      // ✅ COMMIT ONLY AFTER SUCCESS
+      await commitOffsetsIfNecessary();
+
+    } catch (err) {
+      console.error(`Error processing ${batch.topic}:`, err.message);
+
+      // ❌ DO NOT COMMIT → Kafka will retry
+    }
+  },
+});
 }
 
 
