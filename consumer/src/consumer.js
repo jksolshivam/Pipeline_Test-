@@ -8,20 +8,66 @@ CompressionCodecs[CompressionTypes.Snappy] = SnappyCodec;
 
 const SECRET_NAME = "in-app-events-credentials";
 const AWS_REGION = process.env.AWS_REGION || "us-east-1";
+const CONFIG_REFRESH_MS = 300000;
 
 let consumer;
 let kafka;
 let clickhouseClient;
-let healthServer;
 
 let isConsumerConnected = false;
+let isShuttingDown = false;
 let batchBuffer = {};
 let batchCount = 0;
 let allRoutes = [];
+let flushIntervalHandle;
+let flushInFlight = null;
 
 let batchSize;
 let insertIntervalMs;
 let kafkaGroupId;
+
+function getPartitionKey(topic, partition) {
+  return `${topic}:${partition}`;
+}
+
+function getNextOffset(offset) {
+  return (BigInt(offset) + 1n).toString();
+}
+
+function mergeOffsets(target, source) {
+  for (const [partitionKey, offsetData] of Object.entries(source || {})) {
+    const current = target[partitionKey];
+    if (!current || BigInt(offsetData.offset) > BigInt(current.offset)) {
+      target[partitionKey] = offsetData;
+    }
+  }
+}
+
+function ensureTableBuffer(table) {
+  if (!batchBuffer[table]) {
+    batchBuffer[table] = {
+      rows: [],
+      offsets: {},
+    };
+  }
+
+  return batchBuffer[table];
+}
+
+function restoreTableBuffer(table, tableBuffer) {
+  const current = ensureTableBuffer(table);
+  current.rows.unshift(...tableBuffer.rows);
+  mergeOffsets(current.offsets, tableBuffer.offsets);
+  batchCount += tableBuffer.rows.length;
+}
+
+function buildCommitOffsets(offsetMap) {
+  return Object.values(offsetMap).map(({ topic, partition, offset }) => ({
+    topic,
+    partition,
+    offset,
+  }));
+}
 
 // -------------------- CONFIG MANAGER --------------------
 
@@ -36,11 +82,11 @@ const configManager = {
 
       const rows = await resultSet.json();
 
-      const newRoutes = [
-        ...rows.map((r) => ({
-          topic: r.er_kafka_topic,
-          database: r.ch_db_name,
-          table: r.ch_table_name,
+      allRoutes = [
+        ...rows.map((route) => ({
+          topic: route.er_kafka_topic,
+          database: route.ch_db_name,
+          table: route.ch_table_name,
         })),
         {
           topic: "event-unregistered-route",
@@ -54,113 +100,141 @@ const configManager = {
         },
       ];
 
-      allRoutes = newRoutes;
+      console.log(`Loaded ${allRoutes.length} route mappings`);
     } catch (err) {
       console.error("Database config error:", err.message);
     }
   },
 
   startAutoRefresh() {
-    const FETCH_INTERVAL_MS = 300000;
     setInterval(() => {
       configManager
         .fetchConfig()
-        .catch((e) => console.error("Config refresh error:", e.message));
-    }, FETCH_INTERVAL_MS);
+        .catch((err) => console.error("Config refresh error:", err.message));
+    }, CONFIG_REFRESH_MS);
   },
 };
 
 // -------------------- BUFFER --------------------
 
-async function flushBuffer() {
-  if (batchCount === 0) return;
+async function flushBufferInternal() {
+  if (batchCount === 0) {
+    return;
+  }
 
   const currentBuffer = batchBuffer;
+  const totalRows = batchCount;
+  const committedOffsets = {};
+
   batchBuffer = {};
   batchCount = 0;
 
-  for (const [table, rows] of Object.entries(currentBuffer)) {
+  console.log(`Flushing ${totalRows} buffered rows to ClickHouse`);
+
+  for (const [table, tableBuffer] of Object.entries(currentBuffer)) {
     try {
       await clickhouseClient.insert({
         table,
-        values: rows,
+        values: tableBuffer.rows,
         format: "JSONEachRow",
       });
-      console.log(`Flushed ${rows.length} rows to ${table}`);
+
+      mergeOffsets(committedOffsets, tableBuffer.offsets);
+      console.log(`Flushed ${tableBuffer.rows.length} rows to ${table}`);
     } catch (err) {
       console.error(`Flush failed for ${table}:`, err.message);
-
-      if (!batchBuffer[table]) batchBuffer[table] = [];
-      batchBuffer[table].unshift(...rows);
-      batchCount += rows.length;
+      restoreTableBuffer(table, tableBuffer);
     }
   }
+
+  const offsetsToCommit = buildCommitOffsets(committedOffsets);
+  if (offsetsToCommit.length > 0) {
+    await consumer.commitOffsets(offsetsToCommit);
+    console.log(`Committed ${offsetsToCommit.length} Kafka partition offsets`);
+  }
+}
+
+async function flushBuffer() {
+  if (flushInFlight) {
+    return flushInFlight;
+  }
+
+  flushInFlight = (async () => {
+    try {
+      await flushBufferInternal();
+    } finally {
+      flushInFlight = null;
+    }
+  })();
+
+  return flushInFlight;
 }
 
 // -------------------- CONSUMER --------------------
 
 async function runConsumer() {
-   await consumer.subscribe({
+  await consumer.subscribe({
     topic: /^event-.*$/,
-      fromBeginning: false,
-    });
+    fromBeginning: false,
+  });
 
+  await consumer.run({
+    eachBatchAutoResolve: false,
+    autoCommit: false,
 
-
-await consumer.run({
-  eachBatchAutoResolve: false,
-
-  eachBatch: async ({
-    batch,
-    resolveOffset,
-    heartbeat,
-    commitOffsetsIfNecessary,
-    isRunning,
-    isStale,
-  }) => {
-    if (!isRunning() || isStale()) return;
-
-    const route = allRoutes.find((r) => r.topic === batch.topic);
-    if (!route) return;
-
-    const targetPath = `${route.database}.${route.table}`;
-
-    try {
-      const payloads = [];
-
-      for (const message of batch.messages) {
-        payloads.push(JSON.parse(message.value.toString()));
-
-        // 👇 mark message processed (but NOT committed yet)
-        resolveOffset(message.offset);
-
-        await heartbeat();
+    eachBatch: async ({ batch, heartbeat, isRunning, isStale }) => {
+      if (!clickhouseClient) {
+        console.error("ClickHouse client is not initialized");
+        return;
       }
 
-      if (!batchBuffer[targetPath]) {
-        batchBuffer[targetPath] = [];
+      if (!isRunning() || isStale() || isShuttingDown) {
+        return;
       }
 
-      batchBuffer[targetPath].push(...payloads);
-      batchCount += payloads.length;
-
-      // 🔥 IMPORTANT: flush immediately OR before commit
-      if (batchCount >= batchSize) {
-        await flushBuffer();
+      const route = allRoutes.find((item) => item.topic === batch.topic);
+      if (!route) {
+        console.warn(`No route found for topic ${batch.topic}, skipping batch`);
+        return;
       }
 
-      // ✅ COMMIT ONLY AFTER SUCCESS
-      await commitOffsetsIfNecessary();
+      const targetPath = `${route.database}.${route.table}`;
+      const tableBuffer = ensureTableBuffer(targetPath);
 
-    } catch (err) {
-      console.error(`Error processing ${batch.topic}:`, err.message);
+      try {
+        console.log(
+          `Received batch topic=${batch.topic} partition=${batch.partition} messages=${batch.messages.length}`,
+        );
 
-      // ❌ DO NOT COMMIT → Kafka will retry
-    }
-  },
-});
+        for (const message of batch.messages) {
+          const parsedValue = JSON.parse(message.value.toString());
+          tableBuffer.rows.push(parsedValue);
+          batchCount += 1;
+
+          const partitionKey = getPartitionKey(batch.topic, batch.partition);
+          tableBuffer.offsets[partitionKey] = {
+            topic: batch.topic,
+            partition: batch.partition,
+            offset: getNextOffset(message.offset),
+          };
+
+          await heartbeat();
+        }
+
+        console.log(
+          `Buffered ${batch.messages.length} rows for ${targetPath}. Total buffered rows: ${batchCount}`,
+        );
+
+        if (batchCount >= batchSize) {
+          await flushBuffer();
+        }
+      } catch (err) {
+        console.error(`Error processing ${batch.topic}:`, err.message);
+        throw err;
+      }
+    },
+  });
 }
-
 
 // -------------------- START --------------------
 
@@ -176,12 +250,17 @@ async function start() {
       database: secrets.CLICKHOUSE_CONFIG_DATABASE || "default",
     });
 
-    batchSize = parseInt(secrets.CLICKHOUSE_INSERT_BATCH_SIZE || "10000");
+    batchSize = parseInt(secrets.CLICKHOUSE_INSERT_BATCH_SIZE || "10000", 10);
     insertIntervalMs = parseInt(
       secrets.CLICKHOUSE_INSERT_INTERVAL_MS || "5000",
+      10,
     );
 
-    setInterval(flushBuffer, insertIntervalMs);
+    flushIntervalHandle = setInterval(() => {
+      flushBuffer().catch((err) =>
+        console.error("Scheduled flush failed:", err.message),
+      );
+    }, insertIntervalMs);
 
     await configManager.fetchConfig();
     configManager.startAutoRefresh();
@@ -203,15 +282,16 @@ async function start() {
       },
     });
 
-    consumer = kafka.consumer({ groupId: kafkaGroupId,
-      sessionTimeout: 30000,      // 🔥 increase this (default ~10s)  
-      heartbeatInterval: 3000, 
-     });
+    consumer = kafka.consumer({
+      groupId: kafkaGroupId,
+      sessionTimeout: 30000,
+      heartbeatInterval: 3000,
+    });
 
     await consumer.connect();
     isConsumerConnected = true;
 
-    console.log("✅ Kafka connected");
+    console.log("Kafka consumer connected");
 
     await runConsumer();
   } catch (err) {
@@ -226,20 +306,21 @@ start();
 
 ["SIGINT", "SIGTERM"].forEach((signal) => {
   process.on(signal, async () => {
-    console.log(`🛑 Shutdown (${signal})`);
+    if (isShuttingDown) {
+      return;
+    }
 
-    await flushBuffer();
+    isShuttingDown = true;
+    console.log(`Shutdown requested (${signal})`);
 
-    if (healthServer) {
-      await new Promise((resolve, reject) => {
-        healthServer.close((err) => {
-          if (err) {
-            reject(err);
-            return;
-          }
-          resolve();
-        });
-      });
+    if (flushIntervalHandle) {
+      clearInterval(flushIntervalHandle);
+    }
+
+    try {
+      await flushBuffer();
+    } catch (err) {
+      console.error("Final flush failed during shutdown:", err.message);
     }
 
     if (isConsumerConnected) {
